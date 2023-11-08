@@ -124,51 +124,6 @@ make_score(char b1, char b2)
   return blosum50[i1][i2];
 }
 
-static inline cell_t
-compute_Fi0(cell_t** matrix, int T, int i, int m)
-{
-  cell_t Fi0 = {
-    .prev_i = 0,
-    .prev_j = 0,
-    .score = 0,
-  };
-
-  int max_j = 0;
-  int max_i = 0;
-  int max_F_i_j_1 = 0;
-  for (int k = 1; k <= m; k++) {
-    if (max_F_i_j_1 <= matrix[i - 1][k].score) {
-      max_F_i_j_1 = matrix[i - 1][k].score;
-      max_j = k;
-      max_i = i - 1;
-    }
-  }
-
-  cell_t Fi_10 = {
-    .prev_i = 0,
-    .prev_j = 0,
-    .score = 0,
-  };
-
-  if (i - 1 > 0) {
-    // Fi_10 = compute_Fi0(matrix, T, i - 1, m);
-    Fi_10.score = matrix[i - 1][0].score;
-    Fi_10.prev_i = matrix[i - 1][0].prev_i;
-    Fi_10.prev_j = matrix[i - 1][0].prev_j;
-  }
-  if (max_F_i_j_1 - T >= Fi_10.score) {
-    Fi0.score = max_F_i_j_1 - T;
-    Fi0.prev_i = max_i;
-    Fi0.prev_j = max_j;
-  } else {
-    Fi0.score = Fi_10.score;
-    Fi0.prev_i = 0;
-    Fi0.prev_j = 0;
-  }
-
-  return Fi0;
-}
-
 align_result_t*
 repeat_align(seq_t* ref, seq_t* query, align_option_t* option)
 {
@@ -188,24 +143,45 @@ repeat_align(seq_t* ref, seq_t* query, align_option_t* option)
   // align core algorithm
 
   matrix[0][0].score = 0;
-  for (int j = 0; j <= ref->len; j++) {
-    for (int i = 1; i <= query->len; i++) {
+  for (int j = 1; j <= ref->len; j++) {
+    for (int i = 0; i <= query->len; i++) {
 
-      cell_t Fi0 = compute_Fi0(matrix, option->T, i, ref->len);
-
-      if (j == 0) {
-        matrix[i][0] = Fi0;
+      if (i == 0) {
+        int mi, mj, ms = -9999999;
+        for (int k = 0; k <= query->len; k++) {
+          if (matrix[k][j - 1].score - option->T >= ms) {
+            ms = matrix[k][j - 1].score - option->T;
+            mi = k;
+            mj = j - 1;
+          }
+        }
+        if (ms >= matrix[i][j - 1].score) {
+          matrix[i][j].score = ms;
+          matrix[i][j].prev_i = mi;
+          matrix[i][j].prev_j = mj;
+        } else {
+          matrix[i][j].score = matrix[i][j - 1].score;
+          matrix[i][j].prev_i = i;
+          matrix[i][j].prev_j = j - 1;
+        }
         continue;
       }
 
-      // j != 0
       int score = make_score(ref->seq[j - 1], query->seq[i - 1]);
       int F_i_1_j_1 = matrix[i - 1][j - 1].score + score;
       int F_i_j_1 = matrix[i][j - 1].score + option->gap;
       int F_i_1_j = matrix[i - 1][j].score + option->gap;
+      int F_i_0 = matrix[0][j].score;
 
       int max_F = max3(F_i_1_j_1, F_i_1_j, F_i_j_1);
-      max_F = max2(max_F, Fi0.score);
+      max_F = max2(max_F, F_i_0);
+
+      if (F_i_0 == max_F) {
+        matrix[i][j].score = F_i_0;
+        matrix[i][j].prev_i = i;
+        matrix[i][j].prev_j = 0;
+        continue;
+      }
 
       if (F_i_1_j_1 == max_F) {
         matrix[i][j].score = F_i_1_j_1;
@@ -225,20 +201,11 @@ repeat_align(seq_t* ref, seq_t* query, align_option_t* option)
         matrix[i][j].prev_j = j - 1;
         continue;
       }
-      if (Fi0.score == max_F) {
-        matrix[i][j].score = Fi0.score;
-        matrix[i][j].prev_i = Fi0.prev_i;
-        matrix[i][j].prev_j = Fi0.prev_j;
-        continue;
-      }
     }
     system("clear");
     print_matrix(ref, query, matrix);
     sleep(1);
   }
-
-  //
-
   return backtrace(ref, query, matrix);
 }
 

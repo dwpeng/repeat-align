@@ -5,15 +5,11 @@
 #include <unistd.h>
 
 typedef enum {
-  ALIGN_MATCH = 0,
-  ALIGN_MISMATCH = 1,
-  ALIGN_GAP = 2,
-} ALIGN_ENUM;
-
-typedef enum {
   BACKTRACE_UP = 0,
   BACKTRACE_LEFT = 1,
   BACKTRACE_DIAG = 2,
+  BACKTRACE_ZERO = 3,
+  BACKTRACE_JUMP = 4,
 } BACKTRACE_ENUM;
 
 static inline int
@@ -60,9 +56,9 @@ typedef struct {
   free(m);
 
 typedef struct {
-  int prev_i;
-  int prev_j;
   int score;
+  int break_point;
+  BACKTRACE_ENUM backtrace;
 } cell_t;
 
 static inline cell_t**
@@ -78,24 +74,59 @@ print_matrix(seq_t* ref, seq_t* query, cell_t** m)
   printf("\n");
   for (int i = 0; i <= query->len; i++) {
     if (i == 0) {
-      printf("      ");
+      printf("     ");
       for (int j = 0; j < ref->len; j++) {
-        printf(" %c ", ref->seq[j]);
+        printf("      %c", ref->seq[j]);
       }
       printf("\n");
     }
     for (int j = 0; j <= ref->len; j++) {
       if (j == 0) {
         if (i == 0) {
-          printf("   ");
+          printf("  ");
         } else {
-          printf(" %c ", query->seq[i - 1]);
+          printf(" %c", query->seq[i - 1]);
         }
       }
-      printf("%2d ", m[i][j].score);
+      if (m[i][j].break_point) {
+        // green
+        printf("\033[31m%3d (%d)\033[0m", m[i][j].score, m[i][j].backtrace);
+      } else {
+        printf("%3d (%d)", m[i][j].score, m[i][j].backtrace);
+      }
     }
     printf("\n");
   }
+#if 0
+  printf("\n");
+  for (int i = 0; i <= query->len; i++) {
+    if (i == 0) {
+      printf("           ");
+      for (int j = 0; j < ref->len; j++) {
+        printf("        %c:%d", ref->seq[j], j);
+      }
+      printf("\n");
+    }
+    for (int j = 0; j <= ref->len; j++) {
+      if (j == 0) {
+        if (i == 0) {
+          printf("    ");
+        } else {
+          printf(" %c:%d", query->seq[i - 1], i - 1);
+        }
+      }
+      if (m[i][j].break_point) {
+        // green
+        printf("\033[31m%3d (%2d:%-2d)\033[0m", m[i][j].score, m[i][j].prev_i,
+               m[i][j].prev_j);
+      } else {
+        printf("%3d (%2d:%-2d)", m[i][j].score, m[i][j].prev_i,
+               m[i][j].prev_j);
+      }
+    }
+    printf("\n");
+  }
+#endif
 }
 
 static inline align_result_t*
@@ -105,8 +136,6 @@ backtrace(seq_t* ref, seq_t* query, cell_t** matrix)
   result->ref = ref;
   result->query = query;
   result->alignment = (char*)malloc(sizeof(char) * max2(ref->len, query->len));
-  // TODO
-  // backtrace core algorithm
 
   // free matrix
   free_matrxi(matrix, query->len);
@@ -147,22 +176,19 @@ repeat_align(seq_t* ref, seq_t* query, align_option_t* option)
     for (int i = 0; i <= query->len; i++) {
 
       if (i == 0) {
-        int mi, mj, ms = -9999999;
+        int ms = -9999999;
         for (int k = 0; k <= query->len; k++) {
           if (matrix[k][j - 1].score - option->T >= ms) {
             ms = matrix[k][j - 1].score - option->T;
-            mi = k;
-            mj = j - 1;
           }
         }
         if (ms >= matrix[i][j - 1].score) {
           matrix[i][j].score = ms;
-          matrix[i][j].prev_i = mi;
-          matrix[i][j].prev_j = mj;
+          matrix[i][j].break_point = 1;
+          matrix[i][j].backtrace = BACKTRACE_JUMP;
         } else {
           matrix[i][j].score = matrix[i][j - 1].score;
-          matrix[i][j].prev_i = i;
-          matrix[i][j].prev_j = j - 1;
+          matrix[i][j].backtrace = BACKTRACE_LEFT;
         }
         continue;
       }
@@ -176,35 +202,32 @@ repeat_align(seq_t* ref, seq_t* query, align_option_t* option)
       int max_F = max3(F_i_1_j_1, F_i_1_j, F_i_j_1);
       max_F = max2(max_F, F_i_0);
 
-      if (F_i_0 == max_F) {
-        matrix[i][j].score = F_i_0;
-        matrix[i][j].prev_i = i;
-        matrix[i][j].prev_j = 0;
+      if (F_i_1_j_1 == max_F) {
+        matrix[i][j].score = F_i_1_j_1;
+        matrix[i][j].backtrace = BACKTRACE_DIAG;
         continue;
       }
 
-      if (F_i_1_j_1 == max_F) {
-        matrix[i][j].score = F_i_1_j_1;
-        matrix[i][j].prev_i = i - 1;
-        matrix[i][j].prev_j = j - 1;
+      if (F_i_0 == max_F) {
+        matrix[i][j].score = F_i_0;
+        matrix[i][j].backtrace = BACKTRACE_ZERO;
         continue;
       }
+
       if (F_i_1_j == max_F) {
         matrix[i][j].score = F_i_1_j;
-        matrix[i][j].prev_i = i - 1;
-        matrix[i][j].prev_j = j;
+        matrix[i][j].backtrace = BACKTRACE_UP;
         continue;
       }
       if (F_i_j_1 == max_F) {
         matrix[i][j].score = F_i_j_1;
-        matrix[i][j].prev_i = i;
-        matrix[i][j].prev_j = j - 1;
+        matrix[i][j].backtrace = BACKTRACE_LEFT;
         continue;
       }
     }
-    system("clear");
+    printf("\033[2J\033[1;1H");
     print_matrix(ref, query, matrix);
-    sleep(1);
+    usleep(250000);
   }
   return backtrace(ref, query, matrix);
 }

@@ -6,23 +6,27 @@
 
 typedef enum {
   BACKTRACE_UP = 0,
-  BACKTRACE_LEFT = 1,
-  BACKTRACE_DIAG = 2,
-  BACKTRACE_ZERO = 3,
-  BACKTRACE_JUMP = 4,
+  BACKTRACE_LEFT,
+  BACKTRACE_DIAG,
+  BACKTRACE_JUMP,
 } BACKTRACE_ENUM;
 
-static inline int
-max2(int a, int b)
-{
-  return a > b ? a : b;
-}
+static char* backtrace_str[] = {
+  "UP",
+  "LEFT",
+  "DIAG",
+  "JUMP",
+};
 
-static inline int
-max3(int a, int b, int c)
-{
-  return max2(max2(a, b), c);
-}
+typedef enum {
+  MATCH_MISMATCH = 0,
+  MATCH_MATCH,
+  MATCH_GAP,
+  MATCH_JUMP,
+} MATCH_ENUM;
+
+#define max2(a, b) ((a) > (b) ? (a) : (b))
+#define max3(a, b, c) max2(max2(a, b), c)
 
 typedef struct {
   char* seq;
@@ -32,7 +36,8 @@ typedef struct {
 typedef struct {
   seq_t* ref;
   seq_t* query;
-  char* alignment;
+  int* query_alignment;
+  MATCH_ENUM* alignment;
 } align_result_t;
 
 typedef struct {
@@ -59,6 +64,8 @@ typedef struct {
   int score;
   int break_point;
   BACKTRACE_ENUM backtrace;
+  int prev_i;
+  int prev_j;
 } cell_t;
 
 static inline cell_t**
@@ -88,45 +95,30 @@ print_matrix(seq_t* ref, seq_t* query, cell_t** m)
           printf(" %c", query->seq[i - 1]);
         }
       }
+      char c;
+      switch (m[i][j].backtrace) {
+      case BACKTRACE_UP:
+        c = '^';
+        break;
+      case BACKTRACE_LEFT:
+        c = '<';
+        break;
+      case BACKTRACE_DIAG:
+        c = '\\';
+        break;
+      case BACKTRACE_JUMP:
+        c = '*';
+        break;
+      }
       if (m[i][j].break_point) {
         // green
-        printf("\033[31m%3d (%d)\033[0m", m[i][j].score, m[i][j].backtrace);
+        printf("\033[31m%3d (%c)\033[0m", m[i][j].score, c);
       } else {
-        printf("%3d (%d)", m[i][j].score, m[i][j].backtrace);
+        printf("%3d (%c)", m[i][j].score, c);
       }
     }
     printf("\n");
   }
-#if 0
-  printf("\n");
-  for (int i = 0; i <= query->len; i++) {
-    if (i == 0) {
-      printf("           ");
-      for (int j = 0; j < ref->len; j++) {
-        printf("        %c:%d", ref->seq[j], j);
-      }
-      printf("\n");
-    }
-    for (int j = 0; j <= ref->len; j++) {
-      if (j == 0) {
-        if (i == 0) {
-          printf("    ");
-        } else {
-          printf(" %c:%d", query->seq[i - 1], i - 1);
-        }
-      }
-      if (m[i][j].break_point) {
-        // green
-        printf("\033[31m%3d (%2d:%-2d)\033[0m", m[i][j].score, m[i][j].prev_i,
-               m[i][j].prev_j);
-      } else {
-        printf("%3d (%2d:%-2d)", m[i][j].score, m[i][j].prev_i,
-               m[i][j].prev_j);
-      }
-    }
-    printf("\n");
-  }
-#endif
 }
 
 static inline align_result_t*
@@ -135,9 +127,51 @@ backtrace(seq_t* ref, seq_t* query, cell_t** matrix)
   align_result_t* result = (align_result_t*)malloc(sizeof(align_result_t));
   result->ref = ref;
   result->query = query;
-  result->alignment = (char*)malloc(sizeof(char) * max2(ref->len, query->len));
-
-  // free matrix
+  result->query_alignment = (int*)malloc(sizeof(int) * (ref->len + 1));
+  result->alignment = (MATCH_ENUM*)malloc(sizeof(MATCH_ENUM) * (ref->len + 1));
+  int previ = 0, prevj = ref->len;
+  cell_t* cell = NULL;
+  for (int i = ref->len - 1; i >= 0; i--) {
+    cell = &matrix[previ][prevj];
+#if 0
+    printf("previ: %d, prevj: %d, b: %s, %d, i: %d %c:%c\n", previ, prevj,
+           backtrace_str[cell->backtrace], cell->score, i, ref->seq[prevj],
+           query->seq[previ]);
+#endif
+    switch (cell->backtrace) {
+    case BACKTRACE_UP:
+      previ = previ - 1;
+      prevj = prevj;
+      result->alignment[i] = MATCH_GAP;
+      result->query_alignment[i] = previ;
+      break;
+    case BACKTRACE_LEFT:
+      previ = previ;
+      prevj = prevj - 1;
+      result->alignment[i] = MATCH_GAP;
+      result->query_alignment[i] = previ;
+      break;
+    case BACKTRACE_DIAG:
+      previ = previ - 1;
+      prevj = prevj - 1;
+      if (ref->seq[prevj] == query->seq[previ]) {
+        result->alignment[i] = MATCH_MATCH;
+      } else {
+        result->alignment[i] = MATCH_MISMATCH;
+      }
+      result->query_alignment[i] = previ;
+      break;
+    case BACKTRACE_JUMP:
+      previ = cell->prev_i;
+      prevj = cell->prev_j;
+      result->alignment[i] = MATCH_JUMP;
+      result->query_alignment[i] = previ;
+      break;
+    default:
+      fprintf(stderr, "Unknown backtrace: %d\n", cell->backtrace);
+      exit(EXIT_FAILURE);
+    }
+  }
   free_matrxi(matrix, query->len);
   return result;
 }
@@ -176,16 +210,20 @@ repeat_align(seq_t* ref, seq_t* query, align_option_t* option)
     for (int i = 0; i <= query->len; i++) {
 
       if (i == 0) {
-        int ms = -9999999;
+        int mi, mj, ms = -9999999;
         for (int k = 0; k <= query->len; k++) {
           if (matrix[k][j - 1].score - option->T >= ms) {
             ms = matrix[k][j - 1].score - option->T;
+            mi = k;
+            mj = j - 1;
           }
         }
         if (ms >= matrix[i][j - 1].score) {
           matrix[i][j].score = ms;
           matrix[i][j].break_point = 1;
           matrix[i][j].backtrace = BACKTRACE_JUMP;
+          matrix[i][j].prev_i = mi;
+          matrix[i][j].prev_j = mj;
         } else {
           matrix[i][j].score = matrix[i][j - 1].score;
           matrix[i][j].backtrace = BACKTRACE_LEFT;
@@ -210,7 +248,9 @@ repeat_align(seq_t* ref, seq_t* query, align_option_t* option)
 
       if (F_i_0 == max_F) {
         matrix[i][j].score = F_i_0;
-        matrix[i][j].backtrace = BACKTRACE_ZERO;
+        matrix[i][j].backtrace = matrix[0][j].backtrace;
+        matrix[i][j].prev_i = matrix[0][j].prev_i;
+        matrix[i][j].prev_j = matrix[0][j].prev_j;
         continue;
       }
 
@@ -227,7 +267,7 @@ repeat_align(seq_t* ref, seq_t* query, align_option_t* option)
     }
     printf("\033[2J\033[1;1H");
     print_matrix(ref, query, matrix);
-    usleep(250000);
+    usleep(150000);
   }
   return backtrace(ref, query, matrix);
 }
@@ -235,8 +275,37 @@ repeat_align(seq_t* ref, seq_t* query, align_option_t* option)
 void
 print_align(align_result_t* result)
 {
-  // TODO
-  // print alignment
+  int* query_alignment = result->query_alignment;
+  MATCH_ENUM* alignment = result->alignment;
+  char* buffer = (char*)malloc(sizeof(char) * (result->ref->len + 1));
+  char* query = (char*)malloc(sizeof(char) * (result->query->len + 1));
+  for (int i = 0; i < result->ref->len; i++) {
+    switch (alignment[i]) {
+    case MATCH_MISMATCH:
+      buffer[i] = '*';
+      query[i] = result->query->seq[query_alignment[i]];
+      break;
+    case MATCH_MATCH:
+      buffer[i] = '|';
+      query[i] = result->query->seq[query_alignment[i]];
+      break;
+    case MATCH_GAP:
+      buffer[i] = '-';
+      query[i] = '-';
+      break;
+    case MATCH_JUMP:
+      buffer[i] = '.';
+      query[i] = '.';
+      break;
+    }
+  }
+  buffer[result->ref->len] = '\0';
+  query[result->ref->len] = '\0';
+  printf("%s\n", result->ref->seq);
+  printf("%s\n", buffer);
+  printf("%s\n", query);
+  free(buffer);
+  free(query);
 }
 
 int
@@ -272,6 +341,7 @@ main(int argc, char* argv[])
   align_result_t* result = repeat_align(&ref, &query, &option);
   print_align(result);
   if (result != NULL) {
+    free(result->query_alignment);
     free(result->alignment);
     free(result);
   }

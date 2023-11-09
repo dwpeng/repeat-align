@@ -100,7 +100,7 @@ init_score_matrix(int refLen, int queryLen)
 }
 
 void
-print_matrix(seq_t* ref, seq_t* query, cell_t** m)
+print_matrix(seq_t* ref, seq_t* query, cell_t** m, int flag)
 {
   printf("\n");
   for (int i = 0; i <= query->len; i++) {
@@ -134,15 +134,29 @@ print_matrix(seq_t* ref, seq_t* query, cell_t** m)
         c = '*';
         break;
       }
-      if (m[i][j].break_point) {
-        // green
-        printf("\033[31m%3d (%c)\033[0m", m[i][j].score, c);
+
+      if (m[i][j].break_point == flag) {
+        if (m[i][j].backtrace == BACKTRACE_JUMP) {
+          printf("\033[32m%3d (%c)\033[0m", m[i][j].score, c);
+        } else if (m[i][j].backtrace == BACKTRACE_DIAG) {
+          printf("\033[31m%3d (%c)\033[0m", m[i][j].score, c);
+        } else {
+          printf("\033[33m%3d (%c)\033[0m", m[i][j].score, c);
+        }
       } else {
         printf("%3d (%c)", m[i][j].score, c);
       }
     }
     printf("\n");
   }
+}
+
+static inline void
+flash_print(seq_t* ref, seq_t* query, cell_t** m, int flag)
+{
+  printf("\033[2J\033[1;1H");
+  print_matrix(ref, query, m, flag);
+  usleep(150000);
 }
 
 static inline int
@@ -187,6 +201,8 @@ backtrace(seq_t* ref, seq_t* query, cell_t** matrix, int T)
   match_t* match = NULL;
   for (int i = ref->len; i >= 0; i--) {
     cell = &matrix[previ][prevj];
+    cell->break_point = 2;
+    flash_print(result->ref, result->query, matrix, 2);
     switch (cell->backtrace) {
     case BACKTRACE_UP:
       previ = previ - 1;
@@ -319,9 +335,7 @@ repeat_align(seq_t* ref, seq_t* query, align_option_t* option)
         continue;
       }
     }
-    printf("\033[2J\033[1;1H");
-    print_matrix(ref, query, matrix);
-    usleep(150000);
+    flash_print(ref, query, matrix, 1);
   }
   return backtrace(ref, query, matrix, option->T);
 }

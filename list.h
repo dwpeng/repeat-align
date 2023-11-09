@@ -55,6 +55,48 @@ pushTailList(List* list, void* value)
   list->size++;
 }
 
+static inline void*
+popHeadList(List* list)
+{
+  if (list->head == NULL) {
+    return NULL;
+  }
+  Node* node = list->head;
+  void* value = node->value;
+  list->head = node->next;
+  if (list->tail == node) {
+    list->tail = NULL;
+  }
+  free(node);
+  list->size--;
+  return value;
+}
+
+static inline void*
+popTailList(List* list)
+{
+  if (list->tail == NULL) {
+    return NULL;
+  }
+  Node* node = list->tail;
+  void* value = node->value;
+  if (list->head == node) {
+    list->head = NULL;
+    list->tail = NULL;
+  } else {
+    Node* prev = list->head;
+    while (prev->next != node) {
+      prev = prev->next;
+    }
+    prev->next = NULL;
+    list->tail = prev;
+  }
+  free(node);
+  list->size--;
+  return value;
+}
+
+
 static inline void
 freeList(List* list)
 {

@@ -78,7 +78,7 @@ typedef struct {
     memset(name[i], 0, sizeof(type) * (reflen + 1));                          \
   }
 
-#define free_matrxi(m, len)                                                   \
+#define free_matrix(m, len)                                                   \
   for (int i = 0; i <= len; i++) {                                            \
     free(m[i]);                                                               \
   }                                                                           \
@@ -185,7 +185,7 @@ backtrace(seq_t* ref, seq_t* query, cell_t** matrix, int T)
   int prevj = ref->len;
   cell_t* cell = NULL;
   match_t* match = NULL;
-  for (int i = ref->len - 1; i >= 0; i--) {
+  for (int i = ref->len; i >= 0; i--) {
     cell = &matrix[previ][prevj];
     switch (cell->backtrace) {
     case BACKTRACE_UP:
@@ -220,7 +220,11 @@ backtrace(seq_t* ref, seq_t* query, cell_t** matrix, int T)
       exit(EXIT_FAILURE);
     }
   }
-  free_matrxi(matrix, query->len);
+  match_t* m = popHeadList(result->alignment);
+  if (m->match != MATCH_GAP_UP) {
+    pushHeadList(result->alignment, m);
+  }
+  free_matrix(matrix, query->len);
   return result;
 }
 
@@ -232,7 +236,7 @@ make_score(align_option_t* option, char b1, char b2)
   b2 = b2 & 0xDF;
   int i1 = b1 - 'A';
   int i2 = b2 - 'A';
-  if (option->type == 0) {
+  if (option->type == SEQ_PROTEIN) {
     return blosum50[i1][i2];
   } else {
     return (b1 == b2) ? option->match : option->mismatch;
@@ -253,10 +257,8 @@ repeat_align(seq_t* ref, seq_t* query, align_option_t* option)
   //  i(query)
 
   cell_t** matrix = init_score_matrix(ref->len, query->len);
-  // TODO
-  // fill matrix and path
-  // align core algorithm
 
+  // align core algorithm
   matrix[0][0].score = 0;
   for (int j = 1; j <= ref->len; j++) {
     for (int i = 0; i <= query->len; i++) {

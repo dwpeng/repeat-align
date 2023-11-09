@@ -1,4 +1,6 @@
 #include "blosum50.h"
+#include "list.h"
+#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,7 +13,7 @@ typedef enum {
   BACKTRACE_JUMP,
 } BACKTRACE_ENUM;
 
-static char* backtrace_str[] = {
+static const char* backtrace_str[] = {
   "UP",
   "LEFT",
   "DIAG",
@@ -21,7 +23,8 @@ static char* backtrace_str[] = {
 typedef enum {
   MATCH_MISMATCH = 0,
   MATCH_MATCH,
-  MATCH_GAP,
+  MATCH_GAP_UP,
+  MATCH_GAP_LEFT,
   MATCH_JUMP,
 } MATCH_ENUM;
 
@@ -34,17 +37,38 @@ typedef struct {
 } seq_t;
 
 typedef struct {
+  int ref;
+  int query;
+  MATCH_ENUM match;
+} match_t;
+
+static inline match_t*
+createMatch(int ref, int query, MATCH_ENUM match)
+{
+  match_t* m = (match_t*)malloc(sizeof(match_t));
+  m->ref = ref;
+  m->query = query;
+  m->match = match;
+  return m;
+}
+
+typedef struct {
   seq_t* ref;
   seq_t* query;
-  int* query_alignment;
-  MATCH_ENUM* alignment;
+  List* alignment;
 } align_result_t;
+
+typedef enum {
+  SEQ_PROTEIN = 0,
+  SEQ_DNA,
+} SEQ_ENUM;
 
 typedef struct {
   int match;
   int mismatch;
   int gap;
   int T;
+  SEQ_ENUM type;
 } align_option_t;
 
 #define _init_matrix(name, type, reflen, querylen)                            \
@@ -156,47 +180,40 @@ backtrace(seq_t* ref, seq_t* query, cell_t** matrix, int T)
   align_result_t* result = (align_result_t*)malloc(sizeof(align_result_t));
   result->ref = ref;
   result->query = query;
-  result->query_alignment = (int*)malloc(sizeof(int) * (ref->len + 1));
-  result->alignment = (MATCH_ENUM*)malloc(sizeof(MATCH_ENUM) * (ref->len + 1));
+  result->alignment = createList();
   int previ = get_previ(matrix, ref, query, T);
-  printf("previ: %d\n", previ);
   int prevj = ref->len;
   cell_t* cell = NULL;
+  match_t* match = NULL;
   for (int i = ref->len - 1; i >= 0; i--) {
     cell = &matrix[previ][prevj];
-#if 0
-    printf("previ: %d, prevj: %d, b: %s, %d, i: %d %c:%c\n", previ, prevj,
-           backtrace_str[cell->backtrace], cell->score, i, ref->seq[prevj],
-           query->seq[previ]);
-#endif
     switch (cell->backtrace) {
     case BACKTRACE_UP:
       previ = previ - 1;
       prevj = prevj;
-      result->alignment[i] = MATCH_GAP;
-      result->query_alignment[i] = previ;
+      match = createMatch(prevj, previ, MATCH_GAP_UP);
+      pushHeadList(result->alignment, match);
       break;
     case BACKTRACE_LEFT:
       previ = previ;
       prevj = prevj - 1;
-      result->alignment[i] = MATCH_GAP;
-      result->query_alignment[i] = previ;
+      match = createMatch(prevj, previ, MATCH_GAP_LEFT);
+      pushHeadList(result->alignment, match);
       break;
     case BACKTRACE_DIAG:
       previ = previ - 1;
       prevj = prevj - 1;
-      if (ref->seq[prevj] == query->seq[previ]) {
-        result->alignment[i] = MATCH_MATCH;
-      } else {
-        result->alignment[i] = MATCH_MISMATCH;
+      match = createMatch(prevj, previ, MATCH_MATCH);
+      if (ref->seq[prevj] != query->seq[previ]) {
+        match->match = MATCH_MISMATCH;
       }
-      result->query_alignment[i] = previ;
+      pushHeadList(result->alignment, match);
       break;
     case BACKTRACE_JUMP:
       previ = cell->prev_i;
       prevj = cell->prev_j;
-      result->alignment[i] = MATCH_JUMP;
-      result->query_alignment[i] = previ;
+      match = createMatch(prevj, previ, MATCH_JUMP);
+      pushHeadList(result->alignment, match);
       break;
     default:
       fprintf(stderr, "Unknown backtrace: %d\n", cell->backtrace);
@@ -208,14 +225,18 @@ backtrace(seq_t* ref, seq_t* query, cell_t** matrix, int T)
 }
 
 static inline int
-make_score(char b1, char b2)
+make_score(align_option_t* option, char b1, char b2)
 {
   // upper case
   b1 = b1 & 0xDF;
   b2 = b2 & 0xDF;
   int i1 = b1 - 'A';
   int i2 = b2 - 'A';
-  return blosum50[i1][i2];
+  if (option->type == 0) {
+    return blosum50[i1][i2];
+  } else {
+    return (b1 == b2) ? option->match : option->mismatch;
+  }
 }
 
 align_result_t*
@@ -262,7 +283,7 @@ repeat_align(seq_t* ref, seq_t* query, align_option_t* option)
         continue;
       }
 
-      int score = make_score(ref->seq[j - 1], query->seq[i - 1]);
+      int score = make_score(option, ref->seq[j - 1], query->seq[i - 1]);
       int F_i_1_j_1 = matrix[i - 1][j - 1].score + score;
       int F_i_j_1 = matrix[i][j - 1].score + option->gap;
       int F_i_1_j = matrix[i - 1][j].score + option->gap;
@@ -306,37 +327,74 @@ repeat_align(seq_t* ref, seq_t* query, align_option_t* option)
 void
 print_align(align_result_t* result)
 {
-  int* query_alignment = result->query_alignment;
-  MATCH_ENUM* alignment = result->alignment;
-  char* buffer = (char*)malloc(sizeof(char) * (result->ref->len + 1));
-  char* query = (char*)malloc(sizeof(char) * (result->query->len + 1));
-  for (int i = 0; i < result->ref->len; i++) {
-    switch (alignment[i]) {
-    case MATCH_MISMATCH:
-      buffer[i] = '*';
-      query[i] = result->query->seq[query_alignment[i]];
-      break;
+  List* alignment = result->alignment;
+  char* ref_string = malloc(sizeof(char) * (alignment->size + 1));
+  char* match_string = malloc(sizeof(char) * (alignment->size + 1));
+  char* query_string = malloc(sizeof(char) * (alignment->size + 1));
+  memset(ref_string, 0, sizeof(char) * (alignment->size + 1));
+  memset(query_string, 0, sizeof(char) * (alignment->size + 1));
+  int i = 0;
+  for_each_list(alignment, node)
+  {
+    match_t* match = (match_t*)node->value;
+    switch (match->match) {
     case MATCH_MATCH:
-      buffer[i] = '|';
-      query[i] = result->query->seq[query_alignment[i]];
+      ref_string[i] = result->ref->seq[match->ref];
+      query_string[i] = result->query->seq[match->query];
+      match_string[i] = '|';
+      i++;
       break;
-    case MATCH_GAP:
-      buffer[i] = '-';
-      query[i] = '-';
+    case MATCH_MISMATCH:
+      ref_string[i] = result->ref->seq[match->ref];
+      query_string[i] = result->query->seq[match->query];
+      match_string[i] = '*';
+      i++;
+      break;
+    case MATCH_GAP_UP:
+      ref_string[i] = '-';
+      query_string[i] = result->query->seq[match->query];
+      match_string[i] = '-';
+      i++;
+      break;
+    case MATCH_GAP_LEFT:
+      ref_string[i] = result->ref->seq[match->ref];
+      query_string[i] = '-';
+      match_string[i] = '-';
+      i++;
       break;
     case MATCH_JUMP:
-      buffer[i] = '.';
-      query[i] = '.';
+      ref_string[i] = result->ref->seq[match->ref];
+      query_string[i] = '.';
+      match_string[i] = '.';
+      i++;
       break;
     }
   }
-  buffer[result->ref->len] = '\0';
-  query[result->ref->len] = '\0';
-  printf("%s\n", result->ref->seq);
-  printf("%s\n", buffer);
-  printf("%s\n", query);
-  free(buffer);
-  free(query);
+  ref_string[i] = '\0';
+  query_string[i] = '\0';
+  match_string[i] = '\0';
+  printf("%s\n", ref_string);
+  printf("%s\n", match_string);
+  printf("%s\n", query_string);
+  free(ref_string);
+  free(query_string);
+  free(match_string);
+}
+
+static inline SEQ_ENUM
+detect_seq_type(char* seq)
+{
+  int len = strlen(seq);
+  SEQ_ENUM t = SEQ_DNA;
+  for (int i = 0; i < len; i++) {
+    char c = seq[i];
+    c &= 0xDF;
+    if (c != 'A' || c != 'C' || c != 'G' || c != 'T') {
+      t = SEQ_PROTEIN;
+      break;
+    }
+  }
+  return t;
 }
 
 int
@@ -354,11 +412,6 @@ main(int argc, char* argv[])
   printf("ref  :%3d %s\n", len1, s1);
   printf("query:%3d %s\n", len2, s2);
 
-  align_option_t option = {
-    .gap = -8,
-    .T = 20,
-  };
-
   seq_t ref = {
     .seq = s1,
     .len = len1,
@@ -369,11 +422,21 @@ main(int argc, char* argv[])
     .len = len2,
   };
 
+  SEQ_ENUM t1 = detect_seq_type(s1);
+  SEQ_ENUM t2 = detect_seq_type(s2);
+  assert(t1 == t2);
+  printf("seq type: %d\n", t1);
+  align_option_t option = {
+    .gap = -4,
+    .match = 4,
+    .mismatch = -4,
+    .T = 20,
+    .type = t1,
+  };
+
   align_result_t* result = repeat_align(&ref, &query, &option);
   print_align(result);
   if (result != NULL) {
-    free(result->query_alignment);
-    free(result->alignment);
-    free(result);
+    freeList(result->alignment);
   }
 }

@@ -121,15 +121,46 @@ print_matrix(seq_t* ref, seq_t* query, cell_t** m)
   }
 }
 
+static inline int
+get_previ(cell_t** matrix, seq_t* ref, seq_t* query, int T)
+{
+  // check ref.len - 1 column
+  int max_score = -9999999;
+  int max_i = 0;
+  for (int i = 0; i <= query->len; i++) {
+    if (matrix[i][ref->len - 1].score > max_score) {
+      max_score = matrix[i][ref->len - 1].score;
+      max_i = i;
+    }
+  }
+
+  if (max_i < query->len && max_score > T) {
+    if (matrix[max_i + 1][ref->len].backtrace == BACKTRACE_DIAG) {
+      if (matrix[max_i + 1][ref->len].score
+          > matrix[max_i][ref->len - 1].score) {
+        return max_i + 1;
+      }
+    }
+  }
+
+  if (max_i == query->len && max_score > T) {
+    return 0;
+  }
+
+  return 0;
+}
+
 static inline align_result_t*
-backtrace(seq_t* ref, seq_t* query, cell_t** matrix)
+backtrace(seq_t* ref, seq_t* query, cell_t** matrix, int T)
 {
   align_result_t* result = (align_result_t*)malloc(sizeof(align_result_t));
   result->ref = ref;
   result->query = query;
   result->query_alignment = (int*)malloc(sizeof(int) * (ref->len + 1));
   result->alignment = (MATCH_ENUM*)malloc(sizeof(MATCH_ENUM) * (ref->len + 1));
-  int previ = 0, prevj = ref->len;
+  int previ = get_previ(matrix, ref, query, T);
+  printf("previ: %d\n", previ);
+  int prevj = ref->len;
   cell_t* cell = NULL;
   for (int i = ref->len - 1; i >= 0; i--) {
     cell = &matrix[previ][prevj];
@@ -269,7 +300,7 @@ repeat_align(seq_t* ref, seq_t* query, align_option_t* option)
     print_matrix(ref, query, matrix);
     usleep(150000);
   }
-  return backtrace(ref, query, matrix);
+  return backtrace(ref, query, matrix, option->T);
 }
 
 void

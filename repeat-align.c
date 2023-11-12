@@ -160,22 +160,21 @@ flash_print(seq_t* ref, seq_t* query, cell_t** m, int flag)
 }
 
 static inline int
-get_previ(cell_t** matrix, seq_t* ref, seq_t* query, int T)
+get_previ(cell_t** matrix, seq_t* ref, seq_t* query, int T, int col)
 {
   // check ref.len - 1 column
   int max_score = -9999999;
   int max_i = 0;
   for (int i = 0; i <= query->len; i++) {
-    if (matrix[i][ref->len - 1].score > max_score) {
-      max_score = matrix[i][ref->len - 1].score;
+    if (matrix[i][col - 1].score > max_score) {
+      max_score = matrix[i][col - 1].score;
       max_i = i;
     }
   }
 
   if (max_i < query->len && max_score > T) {
-    if (matrix[max_i + 1][ref->len].backtrace == BACKTRACE_DIAG) {
-      if (matrix[max_i + 1][ref->len].score
-          > matrix[max_i][ref->len - 1].score) {
+    if (matrix[max_i + 1][col].backtrace == BACKTRACE_DIAG) {
+      if (matrix[max_i + 1][col].score > matrix[max_i][col - 1].score) {
         return max_i + 1;
       }
     }
@@ -195,9 +194,9 @@ backtrace(seq_t* ref, seq_t* query, cell_t** matrix, int T)
   result->ref = ref;
   result->query = query;
   result->alignment = createList();
-  int previ = get_previ(matrix, ref, query, T);
+  int previ = get_previ(matrix, ref, query, T, ref->len);
   int prevj = ref->len;
-  cell_t* cell = NULL;
+  cell_t *cell = NULL, *cell_next = NULL;
   match_t* match = NULL;
   for (int i = ref->len; i >= 0; i--) {
     cell = &matrix[previ][prevj];
@@ -228,7 +227,20 @@ backtrace(seq_t* ref, seq_t* query, cell_t** matrix, int T)
     case BACKTRACE_JUMP:
       previ = cell->prev_i;
       prevj = cell->prev_j;
-      match = createMatch(prevj, previ, MATCH_JUMP);
+      if (previ + 1 < query->len + 1 && prevj + 1 < ref->len + 1) {
+        cell_next = &matrix[previ + 1][prevj + 1];
+      }
+      if (cell_next) {
+        cell_next->break_point = 2;
+        if (ref->seq[prevj] != query->seq[previ]) {
+          match = createMatch(prevj, previ, MATCH_MISMATCH);
+        } else {
+          match = createMatch(prevj, previ, MATCH_MATCH);
+        }
+        cell_next = NULL;
+      } else {
+        match = createMatch(prevj, previ, MATCH_JUMP);
+      }
       pushHeadList(result->alignment, match);
       break;
     default:
@@ -413,6 +425,16 @@ detect_seq_type(char* seq)
   return t;
 }
 
+static inline void
+upper_string(char* s)
+{
+  int len = strlen(s);
+  for (int i = 0; i < len; i++) {
+    s[i] &= 0xDF;
+  }
+}
+
+
 int
 main(int argc, char* argv[])
 {
@@ -422,6 +444,8 @@ main(int argc, char* argv[])
   }
   char* s1 = argv[1];
   char* s2 = argv[2];
+  upper_string(s1);
+  upper_string(s2);
   int len1 = strlen(s1);
   int len2 = strlen(s2);
 

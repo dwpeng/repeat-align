@@ -13,12 +13,12 @@ typedef enum {
   BACKTRACE_JUMP,
 } BACKTRACE_ENUM;
 
-static const char* backtrace_str[] = {
-  "UP",
-  "LEFT",
-  "DIAG",
-  "JUMP",
-};
+// static const char* backtrace_str[] = {
+//   "UP",
+//   "LEFT",
+//   "DIAG",
+//   "JUMP",
+// };
 
 typedef enum {
   MATCH_MISMATCH = 0,
@@ -160,9 +160,8 @@ flash_print(seq_t* ref, seq_t* query, cell_t** m, int flag)
 }
 
 static inline int
-get_previ(cell_t** matrix, seq_t* ref, seq_t* query, int T, int col)
+get_previ(cell_t** matrix, seq_t* query, int T, int col)
 {
-  // check ref.len - 1 column
   int max_score = -9999999;
   int max_i = 0;
   for (int i = 0; i <= query->len; i++) {
@@ -194,7 +193,7 @@ backtrace(seq_t* ref, seq_t* query, cell_t** matrix, int T)
   result->ref = ref;
   result->query = query;
   result->alignment = createList();
-  int previ = get_previ(matrix, ref, query, T, ref->len);
+  int previ = get_previ(matrix, query, T, ref->len);
   int prevj = ref->len;
   cell_t *cell = NULL, *cell_next = NULL;
   match_t* match = NULL;
@@ -312,7 +311,6 @@ repeat_align(seq_t* ref, seq_t* query, align_option_t* option)
         }
         continue;
       }
-
       int score = make_score(option, ref->seq[j - 1], query->seq[i - 1]);
       int F_i_1_j_1 = matrix[i - 1][j - 1].score + score;
       int F_i_j_1 = matrix[i][j - 1].score + option->gap;
@@ -465,7 +463,6 @@ main(int argc, char* argv[])
   SEQ_ENUM t1 = detect_seq_type(s1);
   SEQ_ENUM t2 = detect_seq_type(s2);
   assert(t1 == t2);
-  printf("seq type: %d\n", t1);
   align_option_t option = {
     .gap = -4,
     .match = 4,
